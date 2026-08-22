@@ -1,7 +1,7 @@
 pipeline {
 
     agent {
-        Agent-1
+        'Agent-1'
     }
 
     environment {
