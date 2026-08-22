@@ -114,39 +114,80 @@ pipeline {
             }
         }
 
+    //     stage('Update GitOps') {
+    //         steps {
+
+    //             sh '''
+    //                 rm -rf gitops
+
+    //                 git clone \
+    //                   ${GITOPS_REPO} \
+    //                   gitops
+
+    //                 cd gitops
+
+    //                 sed -i.bak \
+    //                   "s/imageVersion:.*/imageVersion: \\"${IMAGE_TAG}\\"/" \
+    //                   charts/roboshop/values.yaml
+
+    //                 rm -f charts/roboshop/values.yaml.bak
+
+    //                 git config user.name "Jenkins"
+
+    //                 git config user.email "jenkins@devopsprocloud.in"
+
+    //                 git add .
+
+    //                 git commit \
+    //                   -m "Update cart image to ${IMAGE_TAG}"
+
+    //                 git push origin main
+    //             '''
+    //         }
+    //     }
+    // }
         stage('Update GitOps') {
+
             steps {
 
-                sh '''
-                    rm -rf gitops
+                withCredentials([
+                    usernamePassword(
+                        credentialsId: 'github-pat',
+                        usernameVariable: 'GIT_USERNAME',
+                        passwordVariable: 'GIT_PASSWORD'
+                    )
+                ]) {
 
-                    git clone \
-                      ${GITOPS_REPO} \
-                      gitops
+                    sh '''
+                        rm -rf gitops
 
-                    cd gitops
+                        git clone \
+                        https://${GIT_USERNAME}:${GIT_PASSWORD}@github.com/aws-devopsprocloud/roboshop-gitops.git \
+                        gitops
 
-                    sed -i.bak \
-                      "s/imageVersion:.*/imageVersion: \\"${IMAGE_TAG}\\"/" \
-                      charts/roboshop/values.yaml
+                        cd gitops
 
-                    rm -f charts/roboshop/values.yaml.bak
+                        sed -i.bak \
+                        's/imageVersion:.*/imageVersion: "'${IMAGE_TAG}'"/' \
+                        charts/roboshop/values.yaml
 
-                    git config user.name "Jenkins"
+                        rm -f charts/roboshop/values.yaml.bak
 
-                    git config user.email "jenkins@devopsprocloud.in"
+                        git config user.name "Jenkins"
 
-                    git add .
+                        git config user.email "jenkins@devopsprocloud.in"
 
-                    git commit \
-                      -m "Update cart image to ${IMAGE_TAG}"
+                        git add charts/roboshop/values.yaml
 
-                    git push origin main
-                '''
+                        git commit \
+                        -m "Update cart image to ${IMAGE_TAG}"
+
+                        git push origin main
+                    '''
+                }
             }
         }
     }
-
     post {
 
         success {
