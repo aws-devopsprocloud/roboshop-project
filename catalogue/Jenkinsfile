@@ -93,10 +93,10 @@ pipeline {
                     timeout(time: 1, unit: 'HOURS') {
                         def qg = waitForQualityGate()
                         if (qg.status != 'OK') {
-                            utils.updateCommitStatus('failure', "SonarQube quality gate failed: ${qg.status}", 'sonar-scan')
+                            echo "failure, SonarQube quality gate failed: ${qg.status}"
                             error "Quality gate failed: ${qg.status}"
                         } else {
-                            utils.updateCommitStatus('success', 'SonarQube quality gate passed', 'sonar-scan')
+                            echo "success, SonarQube quality gate passed"
                         }
                     }
                 }
