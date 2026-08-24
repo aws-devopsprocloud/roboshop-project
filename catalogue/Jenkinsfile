@@ -27,7 +27,7 @@ pipeline {
         }
         stage('Read version'){
             steps {
-                dir('catalogue')
+                dir('catalogue') {
                     script {
                         // Load and parse the JSON file
                         def packageJson = readJSON file: 'package.json'
@@ -37,6 +37,7 @@ pipeline {
                         echo "Building version ${appVersion}"
                         //sh 'printenv | sort'
                     }
+                }    
             }
         }
         stage('Install Dependencies') {
