@@ -40,13 +40,21 @@ pipeline {
                 }    
             }
         }
-        stage('Install Dependencies') {
+        stage('Install NodeJS') {
             steps {
                 script{
                     sh """
                         sudo  dnf module disable nodejs -y
                         sudo dnf module enable nodejs:20 -y
                         sudo dnf install nodejs -y
+                    """
+                }
+            }
+        }
+        stage('Installing Dependencies') {
+            steps {
+                dir('catalogue') {
+                    sh """
                         npm install
                     """
                 }
