@@ -1,201 +1,234 @@
-pipeline {
-
-    agent {
-        node {
-            label 'Agent-1'
+def call(Map configMap){
+    pipeline {
+        agent {
+            node {
+                label 'Agent-1' 
+            } 
         }
-    }
-
-    environment {
-
-        AWS_REGION = 'us-east-1'
-
-        AWS_ACCOUNT_ID = '453531893439'
-
-        ECR_REGISTRY = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
-
-        IMAGE_NAME = 'roboshop/cart'
-
-        IMAGE_TAG = "${env.GIT_COMMIT.take(7)}"
-
-        // SONARQUBE = 'sonarqube'
-
-        GITOPS_REPO = 'https://github.com/aws-devopsprocloud/roboshop-gitops.git'
-    }
-
-    stages {
-
-        stage('Checkout') {
-            steps {
-                checkout scm
-            }
+        environment {
+            appVersion = ""
+            acc_id = "453531893439"
+            region = "us-east-1"
+            project = configMap.get("project")
+            component = configMap.get("component")
         }
-
-        // stage('SonarQube Scan') {
-        //     steps {
-
-        //         withSonarQubeEnv("${SONARQUBE}") {
-
-        //             sh '''
-        //                 sonar-scanner \
-        //                   -Dsonar.projectKey=roboshop-cart \
-        //                   -Dsonar.sources=cart
-        //             '''
-        //         }
-        //     }
-        // }
-
-        // stage('Quality Gate') {
-        //     steps {
-
-        //         timeout(time: 5, unit: 'MINUTES') {
-
-        //             waitForQualityGate abortPipeline: true
-        //         }
-        //     }
-        // }
-
-        // stage('Trivy Filesystem Scan') {
-        //     steps {
-
-        //         sh '''
-        //             trivy fs \
-        //               --severity HIGH,CRITICAL \
-        //               --exit-code 1 \
-        //               .
-        //         '''
-        //     }
-        // }
-
-        stage('Docker Build') {
-            steps {
-
-                sh '''
-                    docker build \
-                      -t ${ECR_REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG} \
-                      ./cart
-                '''
-            }
+        options {
+            timeout(time: 15, unit: 'MINUTES')
         }
-
-        // stage('Trivy Image Scan') {
-        //     steps {
-
-        //         sh '''
-        //             trivy image \
-        //               --severity HIGH,CRITICAL \
-        //               --exit-code 1 \
-        //               ${ECR_REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}
-        //         '''
-        //     }
-        // }
-
-        stage('Login to ECR') {
-            steps {
-
-                sh '''
-                    aws ecr get-login-password \
-                      --region ${AWS_REGION} |
-                    docker login \
-                      --username AWS \
-                      --password-stdin \
-                      ${ECR_REGISTRY}
-                '''
-            }
+        parameters {
+            booleanParam(name: 'DEPLOY', defaultValue: false, description: 'Toggle this value')
         }
-
-        stage('Push Image') {
-            steps {
-
-                sh '''
-                    docker push \
-                      ${ECR_REGISTRY}/${IMAGE_NAME}:${IMAGE_TAG}
-                '''
-            }
-        }
-
-    //     stage('Update GitOps') {
-    //         steps {
-
-    //             sh '''
-    //                 rm -rf gitops
-
-    //                 git clone \
-    //                   ${GITOPS_REPO} \
-    //                   gitops
-
-    //                 cd gitops
-
-    //                 sed -i.bak \
-    //                   "s/imageVersion:.*/imageVersion: \\"${IMAGE_TAG}\\"/" \
-    //                   charts/roboshop/values.yaml
-
-    //                 rm -f charts/roboshop/values.yaml.bak
-
-    //                 git config user.name "Jenkins"
-
-    //                 git config user.email "jenkins@devopsprocloud.in"
-
-    //                 git add .
-
-    //                 git commit \
-    //                   -m "Update cart image to ${IMAGE_TAG}"
-
-    //                 git push origin main
-    //             '''
-    //         }
-    //     }
-    // }
-        stage('Update GitOps') {
-
-            steps {
-
-                withCredentials([
-                    usernamePassword(
-                        credentialsId: 'github-pat',
-                        usernameVariable: 'GIT_USERNAME',
-                        passwordVariable: 'GIT_PASSWORD'
-                    )
-                ]) {
-
-                    sh '''
-                        rm -rf gitops
-
-                        git clone \
-                        https://${GIT_USERNAME}:${GIT_PASSWORD}@github.com/aws-devopsprocloud/roboshop-gitops.git \
-                        gitops
-
-                        cd gitops
-
-                        sed -i.bak \
-                        's/imageVersion:.*/imageVersion: "'${IMAGE_TAG}'"/' \
-                        charts/roboshop/values.yaml
-
-                        rm -f charts/roboshop/values.yaml.bak
-
-                        git config user.name "Jenkins"
-
-                        git config user.email "jenkins@devopsprocloud.in"
-
-                        git add charts/roboshop/values.yaml
-
-                        git commit \
-                        -m "Update cart image to ${IMAGE_TAG}"
-
-                        git push origin main
-                    '''
+        stages {
+            stage('Read version'){
+                steps {
+                    script {
+                        // Load and parse the JSON file
+                        def packageJson = readJSON file: 'package.json'
+                        
+                        // Access fields directly
+                        appVersion = packageJson.version
+                        echo "Building version ${appVersion}"
+                        //sh 'printenv | sort'
+                    }
                 }
             }
-        }
-    }
-    post {
+            stage('Install Dependencies') {
+                steps {
+                    script{
+                        sh """
+                            npm install
+                        """
+                    }
+                }
+            }
+            stage('Unit tests') {
+                steps {
+                    script{
+                        def testResult = sh(script: 'npm test', returnStatus: true)
+                        if (testResult != 0) {
+                            utils.updateCommitStatus('failure', 'Unit tests failed', 'unit-tests')
+                            error "Unit tests failed."
+                        } else {
+                            utils.updateCommitStatus('success', 'Unit tests passed', 'unit-tests')
+                        }
+                    }
+                }
+            }
+            stage ('SonarQube Analysis'){
+                steps {
+                    script {
+                        def scannerHome = tool name: 'sonar-8' // agent configuration
+                        withSonarQubeEnv('sonarqube-server') { // analysing and uploading to server
+                            sh "${scannerHome}/bin/sonar-scanner"
+                        }
+                    }
+                }
+            }
+            stage("Quality Gate") {
+                steps {
+                    script {
+                        timeout(time: 1, unit: 'HOURS') {
+                            def qg = waitForQualityGate()
+                            if (qg.status != 'OK') {
+                                utils.updateCommitStatus('failure', "SonarQube quality gate failed: ${qg.status}", 'sonar-scan')
+                                error "Quality gate failed: ${qg.status}"
+                            } else {
+                                utils.updateCommitStatus('success', 'SonarQube quality gate passed', 'sonar-scan')
+                            }
+                        }
+                    }
+                }
+            }
+            // stage('Dependabot Alerts Check') {
+            //     steps {
+            //         script {
+            //             withCredentials([string(credentialsId: 'github-token', variable: 'GITHUB_TOKEN_SCAN')]) {
+            //                 def repoUrl = sh(script: 'git remote get-url origin', returnStdout: true).trim()
+            //                 def repoPath = repoUrl.replaceAll(/.*github\.com[\/:]/, '').replaceAll(/\.git$/, '')
 
-        success {
-            echo "CI completed successfully"
-        }
+            //                 def alertCount = sh(
+            //                     script: """
+            //                         curl -sf \
+            //                             -H "Authorization: Bearer \$GITHUB_TOKEN_SCAN" \
+            //                             -H "Accept: application/vnd.github+json" \
+            //                             -H "X-GitHub-Api-Version: 2022-11-28" \
+            //                             "https://api.github.com/repos/${repoPath}/dependabot/alerts?state=open&per_page=100" \
+            //                         | jq '[.[] | select(.security_vulnerability.severity == "high" or .security_vulnerability.severity == "critical")] | length'
+            //                     """,
+            //                     returnStdout: true
+            //                 ).trim()
 
-        failure {
-            echo "CI pipeline failed"
+            //                 if (alertCount.toInteger() > 0) {
+            //                     utils.updateCommitStatus('failure', "${alertCount} HIGH/CRITICAL Dependabot alert(s) detected", 'library-scan')
+            //                     error("Build aborted: ${alertCount} HIGH/CRITICAL Dependabot alert(s) detected. Resolve them before proceeding.")
+            //                 }
+            //                 utils.updateCommitStatus('success', 'Dependabot check passed — no HIGH/CRITICAL alerts', 'library-scan')
+            //                 echo "Dependabot check passed — no HIGH or CRITICAL vulnerabilities found."
+            //             }
+            //         }
+            //     }
+            // }
+        //     stage('Build Image') {
+        //         steps {
+        //         script{
+        //                 withAWS(credentials: 'aws-creds', region: "${region}") {
+        //                     // Commands here have AWS authentication
+        //                     sh """
+        //                         aws ecr get-login-password --region ${region} | docker login --username AWS --password-stdin ${acc_id}.dkr.ecr.us-east-1.amazonaws.com
+        //                         docker build -t ${acc_id}.dkr.ecr.${region}.amazonaws.com/${project}/${component}:${appVersion} .
+        //                         docker push ${acc_id}.dkr.ecr.${region}.amazonaws.com/${project}/${component}:${appVersion}
+        //                     """
+        //                 }
+        //             }
+        //         }
+        //     }
+        //     stage('Trivy OS Scan') {
+        //         steps {
+        //             script {
+        //                 // Generate table report
+        //                 sh """
+        //                     trivy image \
+        //                         --scanners vuln \
+        //                         --pkg-types os \
+        //                         --severity HIGH,MEDIUM \
+        //                         --format table \
+        //                         --output trivy-os-report.txt \
+        //                         --exit-code 0 \
+        //                         ${acc_id}.dkr.ecr.${region}.amazonaws.com/${project}/${component}:${appVersion}
+        //                 """
+
+        //                 // Print table to console
+        //                 sh 'cat trivy-os-report.txt'
+
+        //                 // Fail pipeline if vulnerabilities found
+        //                 def scanResult = sh(
+        //                     script: """
+        //                         trivy image \
+        //                             --scanners vuln \
+        //                             --pkg-types os \
+        //                             --severity HIGH,MEDIUM \
+        //                             --format table \
+        //                             --exit-code 1 \
+        //                             --quiet \
+        //                             ${acc_id}.dkr.ecr.${region}.amazonaws.com/${project}/${component}:${appVersion}
+        //                     """,
+        //                     returnStatus: true
+        //                 )
+
+        //                 if (scanResult != 0) {
+        //                     utils.updateCommitStatus('failure', 'Trivy OS scan: HIGH/MEDIUM vulnerabilities found', 'trivy-scan')
+        //                     error "🚨 Trivy found HIGH/MEDIUM OS vulnerabilities. Pipeline failed."
+        //                 } else {
+        //                     utils.updateCommitStatus('success', 'Trivy OS scan passed — no HIGH/MEDIUM vulnerabilities', 'trivy-scan')
+        //                     echo "✅ No HIGH or MEDIUM OS vulnerabilities found. Pipeline continues."
+        //                 }
+        //             }
+        //         }
+        //     }
+        //     stage('Trivy Dockerfile Scan'){
+        //         steps {
+        //             script {
+        //                 sh """
+        //                     trivy config \
+        //                         --severity HIGH,MEDIUM \
+        //                         --format table \
+        //                         --output trivy-dockerfile-report.txt \
+        //                         Dockerfile
+        //                 """
+
+        //                 sh 'cat trivy-dockerfile-report.txt'
+
+        //                 def scanResult = sh(
+        //                     script: """
+        //                         trivy config \
+        //                             --severity HIGH,MEDIUM \
+        //                             --exit-code 1 \
+        //                             --format table \
+        //                             Dockerfile
+        //                     """,
+        //                     returnStatus: true
+        //                 )
+
+        //                 if (scanResult != 0) {
+        //                     error "🚨 Trivy found HIGH/MEDIUM misconfigurations in Dockerfile. Pipeline failed."
+        //                 } else {
+        //                     echo "✅ No HIGH or MEDIUM Dockerfile misconfigurations found. Pipeline continues."
+        //                 }
+        //             }
+        //         }
+        //     }
+        //     stage ('Push image to ECR'){
+        //         steps {
+        //             script {
+        //                 try {
+        //                     withAWS(credentials: 'aws-creds', region: "${region}") {
+        //                         sh """
+        //                             aws ecr get-login-password --region ${region} | docker login --username AWS --password-stdin ${acc_id}.dkr.ecr.us-east-1.amazonaws.com
+        //                             docker push ${acc_id}.dkr.ecr.${region}.amazonaws.com/${project}/${component}:${appVersion}
+        //                         """
+        //                     }
+        //                     utils.updateCommitStatus('success', "Image ${appVersion} pushed to ECR", 'push-image')
+        //                 } catch (err) {
+        //                     utils.updateCommitStatus('failure', 'Failed to push image to ECR', 'push-image')
+        //                     throw err
+        //                 }
+        //             }
+        //         }
+        //     }
+        // }
+
+    // post build
+        post { 
+            always { 
+                echo 'I will always say Hello again!'
+                cleanWs()
+            }
+            success {
+                echo "pipeline success"
+            }
+            failure {
+                echo "pipeline failure"
+            }
         }
     }
 }
