@@ -27,15 +27,16 @@ pipeline {
         }
         stage('Read version'){
             steps {
-                script {
-                    // Load and parse the JSON file
-                    def packageJson = readJSON file: 'package.json'
-                    
-                    // Access fields directly
-                    appVersion = packageJson.version
-                    echo "Building version ${appVersion}"
-                    //sh 'printenv | sort'
-                }
+                dir('catalogue')
+                    script {
+                        // Load and parse the JSON file
+                        def packageJson = readJSON file: 'package.json'
+                        
+                        // Access fields directly
+                        appVersion = packageJson.version
+                        echo "Building version ${appVersion}"
+                        //sh 'printenv | sort'
+                    }
             }
         }
         stage('Install Dependencies') {
